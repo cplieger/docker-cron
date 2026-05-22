@@ -1,0 +1,21 @@
+services:
+  docker-cron:
+    image: ghcr.io/cplieger/docker-cron:latest
+    container_name: docker-cron
+    restart: unless-stopped
+    user: "0:0"  # required for docker socket access
+
+    environment:
+      TZ: "Europe/Paris"
+      # Job 1: run a backup every day at 02:00
+      SCHEDULE_1: "0 2 * * *"
+      COMMAND_1: "docker exec my-db pg_dump -U postgres mydb > /backups/mydb.sql"
+      TIMEOUT_1: "3600"
+      # Job 2: cleanup old files weekly
+      SCHEDULE_2: "0 4 * * 0"
+      COMMAND_2: "docker exec my-app find /tmp -mtime +7 -delete"
+      TIMEOUT_2: "300"
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /run/locks:/run/locks  # persist job locks across restarts
