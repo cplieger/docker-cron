@@ -25,22 +25,7 @@ jobs:
           docker run --rm -i hadolint/hadolint:2.12.0 \
             hadolint --ignore DL3018 --ignore DL3008 - < Dockerfile
       - name: Scan for secrets
-        run: |
-          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v8.27.2/gitleaks_8.27.2_linux_x64.tar.gz" \
-            | tar xz -C /usr/local/bin gitleaks
-          gitleaks detect --source . --no-banner
-      - name: Scan for secrets
-        run: |
-          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v8.27.2/gitleaks_8.27.2_linux_x64.tar.gz" \
-            | tar xz -C /usr/local/bin gitleaks
-          gitleaks detect --source . --no-banner
-      - name: Scan for secrets
-        run: |
-          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v8.27.2/gitleaks_8.27.2_linux_x64.tar.gz" \
-            | tar xz -C /usr/local/bin gitleaks
-          gitleaks detect --source . --no-banner
-      - name: Scan for secrets
-        run: |
-          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v8.27.2/gitleaks_8.27.2_linux_x64.tar.gz" \
-            | tar xz -C /usr/local/bin gitleaks
-          gitleaks detect --source . --no-banner
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "false"
