@@ -1,7 +1,7 @@
 # check=error=true
 
 # renovate: datasource=docker depName=docker
-FROM docker:29-cli@sha256:b40b3737eb3bf588d25bb856d3564dd3f9fdb32ac2fc19ebe85cc58d761692a5
+FROM docker:29-cli@sha256:9ba8e32bfc35a2c7ae2feb1e3241b2778ae21dee80f4dcd31d04e1cfdea86ea2
 
 COPY --chmod=644 lib/shell/validate.sh /usr/local/lib/validate.sh
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
