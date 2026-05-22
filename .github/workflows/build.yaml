@@ -63,7 +63,7 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.prep.outputs.tag }}
-        run: gh release create "$VERSION" --title "$VERSION" --generate-notes sbom.spdx.json
+        run: gh release create "$VERSION" --title "$VERSION" --notes-file RELEASE_NOTES.md sbom.spdx.json
 
       - name: Notify homelab
         if: github.ref == 'refs/heads/main'
