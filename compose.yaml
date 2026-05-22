@@ -1,6 +1,6 @@
 services:
   docker-cron:
-    image: ghcr.io/cplieger/docker-cron:latest
+    image: ghcr.io/cplieger/docker-cron:latest@sha256:2e1f11801c62d04c6908712b74aa5353c72dadb1488a2a4ab28f43123d32c323
     container_name: docker-cron
     restart: unless-stopped
     user: "0:0"  # required for docker socket access
