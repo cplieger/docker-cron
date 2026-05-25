@@ -1,16 +1,12 @@
 #!/bin/sh
 # validate.sh — Shared POSIX validation functions for shell entrypoints.
-# Reference implementation of validation logic used across entrypoint scripts
-# (nut-upsd, smtp-relay, docker-cron, db-dumper). Entrypoints inline their own
-# copies (Docker build contexts can't reach parent dirs); this library is the
-# canonical source tested by lib/shell/tests/test-validate.sh.
+# Sourced at runtime by entrypoint.sh; functions print structured log
+# messages to stderr and return 1 on failure.
 #
 # Functions: validate_no_newlines, validate_no_control_chars, validate_numeric,
 # validate_no_brackets, validate_no_quotes, validate_identifier,
 # validate_no_path_traversal, validate_no_open_relay, validate_no_metacharacters,
 # validate_tls_level, validate_spec_format.
-#
-# All functions print structured log messages to stderr and return 1 on failure.
 
 # validate_no_newlines VAR_NAME VALUE
 #   Reject values containing EMBEDDED newlines (prevents config injection).

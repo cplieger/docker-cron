@@ -5,9 +5,9 @@ set -eu
 # All command output goes to container stdout/stderr for log collection.
 #
 # BusyBox crond has no anacron-style catch-up: schedules that fire while
-# the container is down are silently skipped. monitor-backups.sh is the
-# detection surface for missed backup work; drift from a skipped sync is
-# only surfaced at the next successful run.
+# the container is down are silently skipped. For backup-style schedules
+# where missing a run matters, alert on the absence of expected
+# `job finished` log lines rather than relying on retroactive execution.
 #
 # Environment:
 #   SCHEDULE_N             — 5-field cron expression (minute hour dom month dow)

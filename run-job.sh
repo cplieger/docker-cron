@@ -8,9 +8,10 @@ set -u
 # not rely on preserved quoting around arguments with embedded whitespace
 # (crontab parses once, then sh -c parses the joined string again).
 #
-# Structured log fields are prefixed with source=run-job so Loki / Grafana
-# alert rules can distinguish wrapper-level events from downstream command
-# output (e.g. Kopia also emits level=... lines natively).
+# Structured log fields are prefixed with source=run-job so log aggregators
+# (Loki/Grafana, Promtail, etc.) can distinguish wrapper-level events from
+# downstream command output (downstream commands often emit their own
+# `level=...` lines natively).
 
 # Exit codes from timeout(1): 124 = timed out (GNU coreutils),
 # 143 = SIGTERM-killed (BusyBox). Kill-grace = seconds between SIGTERM and SIGKILL.
@@ -45,9 +46,9 @@ log_emit() {
 # Three cases the wrapper distinguishes:
 #   (A) flock -n succeeds, file mtime is recent (< timeout):
 #       Previous container restarted mid-job. Orphaned docker exec may still
-#       be running inside the downstream container. Log warn + proceed; downstream
-#       commands are idempotent (kopia sync-to, pg_dump atomic-rename, monitor,
-#       verify). Operator accepts this trade-off.
+#       be running inside the downstream container. Log warn + proceed; this
+#       relies on configured commands being idempotent (see "Orphaned docker
+#       exec caveat" below).
 #   (B) flock -n fails:
 #       Another invocation is actively running in THIS container. Skip with warn.
 #   (C) flock -n succeeds, file mtime is old (>= timeout) or missing:
@@ -66,12 +67,11 @@ log_emit() {
 # A subsequent cron fire of the same job will find the flock free (correct)
 # and may start a second downstream run concurrent with the orphaned one.
 #
-# This is acceptable because every configured job is idempotent by design:
-#   - kopia sync-to: idempotent (source→target diff)
-#   - pg_dump via db-dumper CGI: writes temp file then atomic rename
-#   - monitor-backups.sh: read-only reporting
-#   - verify-snapshots.sh: read-only verification
-#   - restore-test.sh: writes to scratch dir that it creates per run
+# This is acceptable when configured jobs are idempotent — most common
+# backup and maintenance commands fit (e.g. backup tools that diff source
+# against target, atomic-rename pg_dumps, read-only reporting scripts,
+# scratch-dir scratch-and-rebuild jobs). Design your jobs accordingly:
+# a concurrent restart-then-run should not corrupt anything.
 #
 # `set -e` is deliberately OFF: the script captures `timeout ... sh -c "$*"`'s
 # exit code into `rc` so it can log a distinct level=error for failures. With
