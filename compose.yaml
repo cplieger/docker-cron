@@ -7,13 +7,18 @@ services:
 
     environment:
       TZ: "Europe/Paris"
-      SCHEDULE_1: "0 2 * * *"
+
+      # Job 1 — nightly database dump at 02:00
+      SCHEDULE_1: "0 2 * * *"  # 5-field cron (min hour dom month dow); digits and * , / - only
       COMMAND_1: "docker exec my-db pg_dump -U postgres mydb > /backups/mydb.sql"
-      TIMEOUT_1: "3600"
+      TIMEOUT_1: "3600"  # per-job timeout in seconds (range 30..86400)
+
+      # Job 2 — weekly cleanup at 04:00 every Sunday
       SCHEDULE_2: "0 4 * * 0"
       COMMAND_2: "docker exec my-app find /tmp -mtime +7 -delete"
       TIMEOUT_2: "300"
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - "/run/locks:/run/locks"
+      - "/opt/appdata/docker-cron/locks:/run/locks"  # lock files; persist across restarts so orphan jobs are detectable
+      - "/opt/appdata/backups:/backups"  # mount this only if your jobs write output to /backups
