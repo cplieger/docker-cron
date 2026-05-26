@@ -1,4 +1,3 @@
-# docker-cron
 
 ![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)
 [![GitHub release](https://img.shields.io/github/v/release/cplieger/docker-cron)](https://github.com/cplieger/docker-cron/releases)
@@ -6,119 +5,60 @@
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: docker 29-cli](https://img.shields.io/badge/base-docker_29--cli-2496ED?logo=docker)
 
-Generic Docker cron scheduler with per-job timeouts, locks, and structured logs
+Run scheduled tasks on your Docker host — backups, cleanup scripts,
+image updates — with timeouts, locks, and structured logs.
 
-## Overview
+## What it does
 
-A small cron scheduler designed for running Docker-related tasks (or any
-shell command) on a schedule. Configure jobs via numbered environment
-variables — `SCHEDULE_1`/`COMMAND_1`/`TIMEOUT_1`,
-`SCHEDULE_2`/`COMMAND_2`/`TIMEOUT_2`, etc. — and the container generates a
-crontab at startup, then runs busybox `crond` in the foreground.
+You give it a list of "run this command at this time" pairs as
+environment variables, and it runs them on schedule. Typical use cases:
 
-Each job is wrapped in a thin script that adds:
+- Nightly database dump at 02:00
+- Weekly cleanup of temporary files every Sunday at 04:00
+- Hourly check for new container image versions
 
-- A per-job timeout with `SIGTERM` at the deadline, escalated to `SIGKILL`
-  30 seconds later if the process ignores it
-- A persistent `flock` so two firings of the same job can't run concurrently,
-  and so a container restart mid-job is detectable on the next run
-- Structured start/finish/exit logs for collection by Loki, Promtail, or any
-  structured log scraper
-- A "near timeout" warning when a job uses ≥70% of its configured timeout —
-  useful for tuning before a job actually starts failing
+Under the hood it uses [BusyBox `cron`](https://busybox.net/) — Unix's
+classic scheduler — but `cron` itself is bare-bones (no timeouts, no
+logging, no concurrency control). This image wraps it with the extras
+most people end up reinventing:
 
-**Example use case:** You want a database dump triggered nightly, an off-site
-sync at 03:00, and a weekly cleanup task. Drop this container next to them
-with the Docker socket mounted, set `SCHEDULE_1`/`COMMAND_1`,
-`SCHEDULE_2`/`COMMAND_2`, etc., and the schedules just run. Logs go to stdout
-in a structured format that any log aggregator can parse.
+- **Per-job timeouts** — set a wall-clock cap; the job is killed cleanly
+  if it overruns.
+- **Locks** — two runs of the same job can't overlap, even after a
+  container restart.
+- **Structured logs** — every start, finish, failure, and timeout emits
+  a parseable log line ready to ship to Loki, Grafana Agent, etc.
+- **Strict validation** — typos in schedules or out-of-range timeouts
+  crash the container at startup, so you catch them at deploy time and
+  not when a backup silently fails to run.
+- **Heads-up at 70%** — when a job uses ≥70% of its time budget, a
+  warning log line lets you tune the budget before it starts failing.
 
-**Key features:**
+### Why this design
 
-- Configure up to 99 jobs via `SCHEDULE_N`/`COMMAND_N`/`TIMEOUT_N` env triples;
-  gaps in the numbering are fine, partial pairs (only one of `SCHEDULE_N` or
-  `COMMAND_N` set) log a warning and are skipped
-- Per-job `flock` in a shared volume — survives container restarts so the
-  wrapper can detect "previous container restarted mid-job" vs "another
-  invocation is currently running"
-- Per-job timeout, default 2 hours, configurable per job (range 30s–24h)
-- 70% utilization warning before the timeout actually fires
-- Structured logs (`source=run-job level=info ...`) on every start, finish,
-  timeout, and failure
-- Strict cron expression validation (5 fields, digits and `* , / -` only —
-  no `@reboot`, no `MON`/`TUE`); `%` characters are auto-escaped so you
-  don't have to think about crontab's newline-substitution rule
-- Lock files contain plain-text metadata (`started`, `pid`, `timeout`,
-  `command`) that you can inspect on a running job with
-  `docker exec docker-cron cat /run/locks/job-<N>.lock`
-- Crash-loops at startup on any invalid configuration, so a broken cron
-  expression or out-of-range timeout surfaces as a deploy failure rather
-  than a silent, healthy-but-idle container
+Other Docker-aware cron tools introspect container labels, take JSON
+config, or wrap a custom daemon framework. This image takes the
+opposite approach:
 
-This is a minimal Alpine-based container built on `docker:29-cli` — the base
-image already includes the Docker CLI, so the most common use case (running
-`docker exec` / `docker run` / `docker compose` from cron) works out of the
-box. It runs as root because Docker socket access requires it.
+- **Env-var configuration**, not crontab files or container labels.
+  The container itself holds every schedule and command — nothing to
+  template, no introspection of other containers' state.
+- **Generic shell commands**, not container-action-specific verbs.
+  Anything you can run in `sh -c` works (pipes, redirects, multi-step),
+  so a job can call `docker exec`, `curl`, a Python script, or all
+  three in sequence.
+- **Two shell scripts on top of `crond`** — no Go runtime, no daemon
+  framework. The whole thing is small enough to read end-to-end.
 
-### How It Differs From plain busybox crond / mcuadros/ofelia
+This is a minimal Alpine image based on `docker:29-cli`, so jobs can
+call `docker exec`, `docker run`, or `docker compose` directly. It runs
+as root because mounting the Docker socket requires it.
 
-The upstream [busybox crond](https://busybox.net/) is just a cron
-implementation — you bring your own crontab, your own logging, and your own
-timeout handling. This image adds:
+## Quick start
 
-- Env-driven configuration: no crontab file to mount or template
-- Per-job `flock` with cross-restart awareness (orphan detection)
-- Per-job `timeout -k` wrapper with structured exit-code reporting
-- Strict cron expression validation at startup (catches typos before the
-  first scheduled run)
-- Structured `level=info|warn|error msg="..."` logs for every job event
-
-Compared to [mcuadros/ofelia](https://github.com/mcuadros/ofelia) (a popular
-Go-based docker-aware cron):
-
-- Schedules run shell commands, not Docker exec actions specifically — you
-  get the full power of `sh -c` (pipes, redirects, multi-step commands)
-- No JSON or label-based config — env vars only
-- No Go runtime, no daemon framework — just busybox `crond` and two short
-  shell scripts (entrypoint + per-job wrapper)
-- Simpler model: the container holds the schedule, not the targets; there's
-  no introspection of other containers' labels
-
-### Limitations
-
-- **No anacron-style catch-up.** BusyBox `crond` does not run jobs whose
-  scheduled time fell inside a window where the container was stopped or
-  the host was off. If a daily 02:00 job misses its slot, it simply runs
-  next at the next 02:00. For backup-style schedules where missing a run
-  matters, alert on the absence of a `job finished` log line within an
-  expected window rather than relying on retroactive execution.
-- **Downstream `docker exec` processes are not killed on timeout.** When a
-  job's timeout fires, the wrapper sends `SIGTERM` (then `SIGKILL`) to the
-  local `sh -c` process. Docker's exec API does not propagate signals into
-  the target container, so the remote process keeps running until it
-  finishes naturally — and the next firing of the same job can overlap
-  with that orphan. Design jobs to be idempotent.
-
-## Container Registries
-
-This image is published to both GHCR and Docker Hub:
-
-| Registry | Image |
-|----------|-------|
-| GHCR | `ghcr.io/cplieger/docker-cron` |
-| Docker Hub | `docker.io/cplieger/docker-cron` |
-
-```bash
-# Pull from GHCR
-docker pull ghcr.io/cplieger/docker-cron:latest
-
-# Pull from Docker Hub
-docker pull cplieger/docker-cron:latest
-```
-
-Both registries receive identical images and tags. Use whichever you prefer.
-
-## Quick Start
+The image is published to both GHCR (`ghcr.io/cplieger/docker-cron`)
+and Docker Hub (`cplieger/docker-cron`) — identical contents, use
+whichever you prefer.
 
 ```yaml
 services:
@@ -126,7 +66,7 @@ services:
     image: ghcr.io/cplieger/docker-cron:latest
     container_name: docker-cron
     restart: unless-stopped
-    user: "0:0"  # required for docker socket access
+    user: "0:0"  # required for Docker socket access
 
     environment:
       TZ: "Europe/Paris"
@@ -143,54 +83,39 @@ services:
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      # Mount /backups too if your jobs write dumps to the host
       - "/opt/appdata/backups:/backups"
-      # Lock files persist across container restarts so the wrapper can
-      # detect "previous container restarted mid-job" vs "another invocation
-      # is currently running". Use a non-tmpfs host path.
+      # Persistent host path for lock files so they survive restarts
       - "/opt/appdata/docker-cron/locks:/run/locks"
 ```
 
-## Deployment
+Configure jobs as `SCHEDULE_N` / `COMMAND_N` / `TIMEOUT_N` triples for
+`N` between 1 and 99. Numbering doesn't have to be contiguous — gaps
+are fine.
 
-1. Define one or more job triples — `SCHEDULE_N`, `COMMAND_N`, and optionally
-   `TIMEOUT_N` — for `N` between 1 and 99. Triples don't have to be
-   contiguous; the entrypoint scans 1..99 and silently skips slots where
-   both `SCHEDULE_N` and `COMMAND_N` are empty. If only one of the two is
-   set, that slot is logged as `incomplete job` and skipped (it does not
-   crash the container).
-2. Use a 5-field cron expression for `SCHEDULE_N`:
-   `<minute> <hour> <day-of-month> <month> <day-of-week>`. Only digits and
-   `*`, `,`, `/`, `-` are accepted. `@reboot`, `@daily`, and weekday names
-   like `MON` are explicitly **not** supported (they're rejected at startup
-   and crash the container).
-3. `COMMAND_N` is a shell command run via `sh -c`. Pipes, redirects,
-   environment variable expansion (resolved at job-run time), and multi-step
-   commands all work. `%` characters are auto-escaped by the entrypoint
-   so you don't have to think about crontab's "newline + stdin" rule.
-4. `TIMEOUT_N` is the per-job wall-clock timeout in seconds. Range: 30–86400
-   (30s–24h). When unset, the wrapper uses `TIMEOUT_DEFAULT` (default
-   7200s / 2h). Both `TIMEOUT_N` and `TIMEOUT_DEFAULT` are range-validated
-   at startup; out-of-range values crash the container.
-5. Mount `/var/run/docker.sock` if your jobs need to call `docker exec`,
-   `docker run`, or `docker compose`. The container runs as root because
-   Docker socket access requires it.
-6. Mount a persistent host directory at `/run/locks` so the per-job lock
-   files survive container restarts. This lets the wrapper detect
-   "previous container restarted mid-job" — see Limitations for the
-   downstream-process caveat that goes with this.
-7. The container will crash-loop at startup if no valid jobs are configured,
-   if any cron expression has the wrong field count or contains invalid
-   characters, or if any timeout falls outside the allowed range. This is
-   intentional — it surfaces misconfiguration as a deploy failure rather
-   than as a silent, healthy-but-idle container.
+## Configuration reference
+
+### Environment variables
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `TZ` | Container timezone — controls when cron expressions fire | `UTC` | No |
+| `SCHEDULE_N` | 5-field cron expression for job `N`. Only digits and `*`, `,`, `/`, `-` accepted; no `@reboot`, no weekday names like `MON`. | — | At least one job |
+| `COMMAND_N` | Shell command for job `N`, run via `sh -c` (pipes, redirects, multi-step commands all work). `%` characters are auto-escaped. | — | At least one job |
+| `TIMEOUT_N` | Wall-clock timeout in seconds for job `N`. Range 30–86400. | `TIMEOUT_DEFAULT` | No |
+| `TIMEOUT_DEFAULT` | Default timeout for jobs that don't set their own. Range 30–86400. | `7200` (2h) | No |
+
+### Volumes
+
+| Mount | Description |
+|-------|-------------|
+| `/var/run/docker.sock` | Docker socket. Required if jobs use `docker exec` / `run` / `compose`. |
+| `/run/locks` | Per-job lock files. Mount a persistent host path so locks survive container restarts and the wrapper can detect orphaned runs. |
 
 ## Examples
 
 The repo's [`examples/`](examples/) directory has ready-to-use scripts
-demonstrating common patterns. Each example is meant to be bind-mounted
-into the docker-cron container — they are **not** baked into the image,
-so you can edit them freely or write your own.
+that bind-mount into the container — they aren't baked into the image,
+so you can edit them or write your own.
 
 | Script | What it does |
 |--------|--------------|
@@ -198,22 +123,19 @@ so you can edit them freely or write your own.
 
 ### Setting up `update-compose-stacks.sh`
 
-1. Copy the script from the repo's `examples/` directory to a location on
-   your host (or clone the repo and reference the path directly).
-2. Mount the script read-only into docker-cron at a stable path like
+1. Copy the script from `examples/` to a path on your host.
+2. Mount it read-only at a stable path inside the container, e.g.
    `/scripts/update-compose-stacks.sh`.
-3. For each Compose stack you want to keep up to date, mount its
-   directory (the one containing `compose.yaml`) into the container
-   **at the same path it has on the host**, read-write. Same path
-   because Compose resolves relative bind mounts (`./data`, `./config`)
-   against the project directory at runtime; if the path inside the
-   container differs from the host path, the daemon receives source
-   paths that don't exist on the host. Read-write because Compose may
-   write transient state (project metadata, generated overrides) to the
-   project directory during `up -d`.
-4. Add a job triple that calls the script with one or more stack paths.
+3. For each Compose stack, mount its directory into the container at
+   the **same path it has on the host**, read-write. Same path because
+   Compose resolves relative bind mounts (`./data`, `./config`) against
+   the project directory at runtime — if the path inside the container
+   differs from the host path, the daemon receives source paths that
+   don't exist on the host. Read-write because Compose may write
+   project metadata to the directory during `up -d`.
+4. Add a job that calls the script with one or more stack paths.
 
-A complete compose example:
+Complete compose example:
 
 ```yaml
 services:
@@ -221,88 +143,34 @@ services:
     image: ghcr.io/cplieger/docker-cron:latest
     container_name: docker-cron
     restart: unless-stopped
-    user: "0:0"  # required for docker socket access
+    user: "0:0"
 
     environment:
       TZ: "Europe/Paris"
 
-      # Update two compose stacks daily at 04:00. Pass the SAME paths
-      # the host uses (see volume mounts below).
       SCHEDULE_1: "0 4 * * *"
       COMMAND_1: "/scripts/update-compose-stacks.sh /opt/stacks/app-a /opt/stacks/app-b"
-      TIMEOUT_1: "1800"  # 30 minutes — raise if your images are large
+      TIMEOUT_1: "1800"  # 30 min — raise if your images are large
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - "/opt/appdata/docker-cron/locks:/run/locks"
-
-      # The example script — copy from the repo's examples/ directory.
-      # Read-only is fine here; the script is just executed.
       - "/path/to/update-compose-stacks.sh:/scripts/update-compose-stacks.sh:ro"
-
-      # Each stack you want to keep up to date. Mount at the SAME path
-      # inside the container as on the host so Compose's relative-path
-      # resolution (e.g. `./data` in compose.yaml) yields paths that
-      # exist on the host. Read-write because Compose may write project
-      # metadata to the directory during `up -d`.
+      # Stack mounts: same path inside as on the host (see step 3 above)
       - "/opt/stacks/app-a:/opt/stacks/app-a"
       - "/opt/stacks/app-b:/opt/stacks/app-b"
 ```
 
-The script is idempotent — running it when nothing has changed is
-effectively a no-op (`docker compose pull` only downloads new image
-digests, and `docker compose up -d` only recreates containers whose
-definition or image actually changed). Schedule it as frequently as
+The script is idempotent — `docker compose pull` only downloads new
+image digests, and `docker compose up -d` only recreates containers
+whose definition or image actually changed. Schedule it as often as
 you want.
-
-## Environment Variables
-
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `TZ` | Container timezone — affects when cron expressions fire | `UTC` | No |
-| `SCHEDULE_N` | 5-field cron expression for job `N` (1..99). Only digits and `*`, `,`, `/`, `-` accepted; no `@reboot`, no weekday names. | - | At least one |
-| `COMMAND_N` | Shell command for job `N`. Run via `sh -c`. | - | At least one |
-| `TIMEOUT_N` | Per-job wall-clock timeout in seconds for job `N`. Range 30–86400. | `TIMEOUT_DEFAULT` | No |
-| `TIMEOUT_DEFAULT` | Default timeout for jobs that don't specify `TIMEOUT_N`. Range 30–86400. | `7200` (2h) | No |
-
-## Volumes
-
-| Mount | Description |
-|-------|-------------|
-| `/var/run/docker.sock` | Docker socket. Required if your jobs call `docker exec`, `docker run`, or `docker compose`. |
-| `/run/locks` | Per-job lock files (`job-N.lock`). Mount a persistent host path so locks survive container restarts and the wrapper can detect orphan jobs. |
-
-## Docker Healthcheck
-
-The container ships a built-in Docker healthcheck (interval 30s, timeout 5s,
-3 retries, 15s start period) that runs `pidof crond` to verify the busybox
-`crond` process is still alive.
-
-**When it becomes unhealthy:**
-
-- `crond` crashed or exited unexpectedly
-- The container is starting up (during `start_period`)
-
-**When it recovers:**
-
-- `crond` is restarted by Docker. The `restart: unless-stopped` policy in
-  the example compose brings the container back, which restarts `crond`.
-
-| Type | Command | Meaning |
-|------|---------|---------|
-| Process | `pidof crond` | Exit 0 = `crond` is running |
-
-The healthcheck only confirms the scheduler process is alive — it does not
-verify that individual jobs are succeeding. Job results are visible in the
-container logs as structured `source=run-job` lines; alert on `level=error`
-lines (job failures and timeouts) via Loki/Grafana, or any log alerting tool.
 
 ## Logging
 
-Every job event — start, finish, failure, timeout, near-timeout, and
-restart-orphan — is emitted as a structured log line on the container's
-stdout/stderr. Anything your command itself writes to stdout or stderr
-also lands in `docker logs` alongside the wrapper's lines.
+Every job event emits a single structured log line on stdout/stderr.
+Anything the command itself writes also lands in `docker logs`
+alongside the wrapper's lines.
 
 ```
 source=run-job level=info  msg="job started"  job=1 timeout=3600s
@@ -313,63 +181,81 @@ source=run-job level=error msg="job failed"   job=3 exit=1   duration=12s
 source=run-job level=warn  msg="previous run orphaned by container restart — starting new run" job=1 prev_age=180s timeout=3600s
 ```
 
-Timeouts surface as `reason=timeout` whether the underlying `timeout`
-binary is GNU coreutils (exit 124) or BusyBox (exit 143), so log-based
-alert rules can key on a single field across base images.
+Timeouts always surface as `reason=timeout` whether the underlying
+`timeout` binary is GNU coreutils (exit 124) or BusyBox (exit 143), so
+log-based alerts can key on a single field across base images.
+
+Lock files at `/run/locks/job-<N>.lock` carry plain-text metadata
+(`started`, `pid`, `timeout`, `command`) that you can inspect on a
+running job:
+
+```bash
+docker exec docker-cron cat /run/locks/job-1.lock
+```
+
+## Healthcheck
+
+The container's built-in healthcheck runs `pidof crond` every 30s — exit
+0 means the scheduler is alive. It does **not** verify that individual
+jobs are succeeding; alert on `level=error` log lines via Loki / Grafana
+or your tool of choice for that.
+
+## Limitations
+
+- **No catch-up runs.** BusyBox `crond` doesn't run jobs whose scheduled
+  time fell while the container was stopped. A daily 02:00 job that
+  misses its slot waits until tomorrow's 02:00. For backups where
+  missing a run matters, alert on the absence of a `job finished` log
+  line within the expected window rather than hoping for retroactive
+  execution.
+- **`docker exec` processes survive timeouts.** When a job times out,
+  the wrapper kills its local `sh -c` process. Docker's exec API does
+  not propagate signals into the target container, so the remote
+  process keeps running until it finishes naturally — and the next
+  firing of the same job can overlap with that orphan. Design jobs to
+  be idempotent.
 
 ## Security
 
-This is a thin scheduler — input handling is the main concern. The
-container:
-
-- Validates every `SCHEDULE_N` is exactly 5 whitespace-separated fields
-  containing only digits and the cron metacharacters `* , / -`. Anything
-  outside that set — including `;`, `&`, `|`, `$`, `` ` ``, alphabetics,
-  and shell quoting — is rejected before the crontab is written.
-- Rejects any control character (newlines, carriage returns, etc.) in
-  `SCHEDULE_N` and `COMMAND_N` to prevent crontab injection
-- Validates `TIMEOUT_N` and `TIMEOUT_DEFAULT` are positive integers in the
-  30–86400 range
-- Crash-loops at startup if any validation fails — bad config never reaches
-  `crond`
-
-`COMMAND_N` is intentionally passed verbatim to `sh -c`. The shell does
-what shells do — pipes, redirects, command substitution. Treat env-var
-supplied commands as trusted; don't accept them from untrusted sources.
-
-This container runs as **root** because Docker socket access requires it.
-The Docker socket is equivalent to root on the host — anyone able to write
-to `COMMAND_N` (or to the compose file) can escalate to host root.
+- All `SCHEDULE_N` and `COMMAND_N` values are validated before they
+  reach `crond`. Schedules must be 5 whitespace-separated fields of
+  digits and `* , / -`; control characters (newline, CR) are rejected
+  in both. Bad config crash-loops the container at startup.
+- `COMMAND_N` is passed verbatim to `sh -c` — pipes, redirects, command
+  substitution all work. Treat env-var-supplied commands as trusted;
+  don't accept them from untrusted sources.
+- The container runs as **root** because Docker socket access requires
+  it. The Docker socket is equivalent to root on the host, so anyone
+  able to write to `COMMAND_N` (or to your compose file) can escalate
+  to host root. This is the standard tradeoff for any socket-mounting
+  container.
 
 ## Dependencies
-
-All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest for reproducibility.
 
 | Dependency | Version | Source |
 |------------|---------|--------|
 | docker | `29-cli` | [Docker Hub](https://hub.docker.com/_/docker) |
 
-## Design Principles
-
-- **Always up to date**: Base images and libraries are updated automatically via Renovate.
-- **Minimal attack surface**: Just busybox `crond` plus two thin shell scripts (entrypoint + per-job wrapper). No Go binary, no Python, no daemon framework.
-- **Digest-pinned**: Every `FROM` instruction pins a SHA256 digest. All GitHub Actions are digest-pinned.
-- **Multi-platform**: Built for `linux/amd64` and `linux/arm64`.
-- **Healthchecks**: The built-in `HEALTHCHECK` confirms `crond` is running.
-- **Provenance**: Build provenance is attested via GitHub Actions, verifiable with `gh attestation verify`. SBOMs are generated with Syft and signed with Cosign.
+Updated automatically via [Renovate](https://github.com/renovatebot/renovate)
+and pinned by digest. Builds carry signed SBOMs and provenance attestations
+verifiable with `gh attestation verify`.
 
 ## Credits
 
-This is an original tool that builds upon [BusyBox `crond`](https://busybox.net/).
 - [BusyBox](https://busybox.net/) — `crond` and `timeout -k`
-- [Docker CLI](https://github.com/docker/cli) — Docker Engine client used
-  by jobs that call `docker exec` / `docker run`
+- [Docker CLI](https://github.com/docker/cli) — used by jobs that call
+  `docker exec` / `run` / `compose`
 
 ## Disclaimer
 
-These images are built with care and follow security best practices, but they are intended for **homelab use**. No guarantees of fitness for production environments. Use at your own risk.
+These images are built with care and follow security best practices,
+but they are intended for **homelab use**. No guarantees of fitness
+for production environments. Use at your own risk.
 
-This project was built with AI-assisted tooling using [Claude Opus](https://www.anthropic.com/claude) and [Kiro](https://kiro.dev). The human maintainer defines architecture, supervises implementation, and makes all final decisions.
+This project was built with AI-assisted tooling using
+[Claude Opus](https://www.anthropic.com/claude) and [Kiro](https://kiro.dev).
+The human maintainer defines architecture, supervises implementation,
+and makes all final decisions.
 
 ## License
 
