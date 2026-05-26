@@ -203,8 +203,14 @@ so you can edit them freely or write your own.
 2. Mount the script read-only into docker-cron at a stable path like
    `/scripts/update-compose-stacks.sh`.
 3. For each Compose stack you want to keep up to date, mount its
-   directory (the one containing `compose.yaml`) read-only into the
-   container under `/stacks/<name>`.
+   directory (the one containing `compose.yaml`) into the container
+   **at the same path it has on the host**, read-write. Same path
+   because Compose resolves relative bind mounts (`./data`, `./config`)
+   against the project directory at runtime; if the path inside the
+   container differs from the host path, the daemon receives source
+   paths that don't exist on the host. Read-write because Compose may
+   write transient state (project metadata, generated overrides) to the
+   project directory during `up -d`.
 4. Add a job triple that calls the script with one or more stack paths.
 
 A complete compose example:
@@ -220,21 +226,27 @@ services:
     environment:
       TZ: "Europe/Paris"
 
-      # Update two compose stacks daily at 04:00
+      # Update two compose stacks daily at 04:00. Pass the SAME paths
+      # the host uses (see volume mounts below).
       SCHEDULE_1: "0 4 * * *"
-      COMMAND_1: "/scripts/update-compose-stacks.sh /stacks/app-a /stacks/app-b"
+      COMMAND_1: "/scripts/update-compose-stacks.sh /opt/stacks/app-a /opt/stacks/app-b"
       TIMEOUT_1: "1800"  # 30 minutes — raise if your images are large
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - "/opt/appdata/docker-cron/locks:/run/locks"
 
-      # The example script — copy from the repo's examples/ directory
+      # The example script — copy from the repo's examples/ directory.
+      # Read-only is fine here; the script is just executed.
       - "/path/to/update-compose-stacks.sh:/scripts/update-compose-stacks.sh:ro"
 
-      # Each stack you want to keep up to date (must contain a compose.yaml)
-      - "/path/to/data/app-a:/stacks/app-a:ro"
-      - "/path/to/data/app-b:/stacks/app-b:ro"
+      # Each stack you want to keep up to date. Mount at the SAME path
+      # inside the container as on the host so Compose's relative-path
+      # resolution (e.g. `./data` in compose.yaml) yields paths that
+      # exist on the host. Read-write because Compose may write project
+      # metadata to the directory during `up -d`.
+      - "/opt/stacks/app-a:/opt/stacks/app-a"
+      - "/opt/stacks/app-b:/opt/stacks/app-b"
 ```
 
 The script is idempotent — running it when nothing has changed is
