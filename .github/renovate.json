@@ -1,45 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:best-practices"
-  ],
-  "timezone": "Europe/Paris",
-  "automerge": true,
-  "automergeType": "pr",
-  "platformAutomerge": true,
-  "labels": [
-    "dependencies"
-  ],
-  "packageRules": [
-    {
-      "matchUpdateTypes": [
-        "minor",
-        "patch",
-        "digest",
-        "pin"
-      ],
-      "automerge": true
-    },
-    {
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "automerge": false,
-      "labels": [
-        "major-update"
-      ]
-    }
-  ],
-  "ignorePaths": [
-    "compose.yaml"
-  ],
+  "extends": ["github>cplieger/ci"],
+  "ignorePaths": ["compose.yaml"],
   "customManagers": [
     {
       "customType": "regex",
       "description": "Dockerfile ARG versions with renovate comments",
-      "managerFilePatterns": [
-        "/Dockerfile$/"
-      ],
+      "managerFilePatterns": ["/Dockerfile$/"],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>[^\\s]+)(\\s+versioning=(?<versioning>[a-z-]+))?\\nARG\\s+\\w+=(?<currentValue>\\S+)"
       ]
@@ -47,15 +14,10 @@
     {
       "customType": "regex",
       "description": "Workflow shell pins (git-cliff, etc.)",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/.+\\.yaml$/"
-      ],
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.yaml$/"],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>[^\\s]+)(\\s+versioning=(?<versioning>[a-z-]+))?\\s*\\n\\s*VERSION=(?<currentValue>\\S+)"
       ]
     }
-  ],
-  "dependencyDashboardLabels": [
-    "renovate"
   ]
 }
